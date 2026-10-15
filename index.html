@@ -1,0 +1,229 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, doc, onSnapshot, setDoc 
+} from 'firebase/firestore';
+import { 
+  getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  Calendar, Clock, MapPin, ExternalLink, CheckCircle2, Circle, 
+  DollarSign, Plus, Trash2, Compass, Globe, Share2, Sparkles, 
+  Info, Building2, ShoppingBag, Utensils, Ticket, Send, Navigation, Download, FileText
+} from 'lucide-react';
+
+const firebaseConfigStr = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
+let firebaseConfig = {};
+try { firebaseConfig = JSON.parse(firebaseConfigStr); } catch (e) {}
+
+const app = firebaseConfig.apiKey ? initializeApp(firebaseConfig) : null;
+const auth = app ? getAuth(app) : null;
+const db = app ? getFirestore(app) : null;
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'singapore-family-trip-2026';
+const STORAGE_KEY = 'sg_family_trip_planner_react_v1';
+
+const CURRENCIES = {
+  SGD: { symbol: 'S$', rate: 1, label: 'Singapore Dollar' },
+  HKD: { symbol: 'HK$', rate: 5.8, label: 'Hong Kong Dollar' },
+  GBP: { symbol: '£', rate: 0.60, label: 'British Pound' }
+};
+
+const DEFAULT_ITINERARY = [
+  {
+    day: 1,
+    date: 'Oct 27 (Mon)',
+    title: 'Arrival & Evening River Cruise',
+    items: [
+      { id: 'd1_1', time: '15:00', title: 'Hotel Check-in', location: 'One Farrer Hotel', desc: 'Check in & unpack.', costSGD: 0, checked: true, category: 'hotel' },
+      { id: 'd1_2', time: '17:30', title: 'MRT to Clarke Quay', location: 'Farrer Park -> Clarke Quay', desc: 'Take MRT.', costSGD: 4.8, checked: true, category: 'transport' },
+      { id: 'd1_3', time: '18:00', title: 'Hawker Dinner', location: 'Hong Lim Market', desc: 'Local food.', costSGD: 18, checked: true, category: 'food' },
+      { id: 'd1_4', time: '19:15', title: 'Singapore River Cruise', location: 'Clarke Quay Jetty', desc: 'Historic boat tour.', costSGD: 74, checked: true, category: 'attraction' }
+    ]
+  }
+];
+
+export default function App() {
+  const [activeRoom, setActiveRoom] = useState('SINGAPORE-2026');
+  const [user, setUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('itinerary');
+  const [activeDay, setActiveDay] = useState(1);
+  const [currency, setCurrency] = useState('SGD');
+
+  const [itinerary, setItinerary] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.itinerary) return parsed.itinerary;
+      }
+    } catch (e) {}
+    return DEFAULT_ITINERARY;
+  });
+
+  const [notes, setNotes] = useState([]);
+
+  const formatCost = (costInSGD) => {
+    const curr = CURRENCIES[currency];
+    const val = costInSGD * curr.rate;
+    return `${curr.symbol}${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  };
+
+  // PDF Export Trigger
+  const handleExportPDF = () => {
+    let totalEst = 0;
+    let totalSpent = 0;
+
+    let content = `
+      <div style="font-family: Arial, sans-serif; padding: 20px; color: #111;">
+        <div style="border-b: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px;">
+          <h1 style="margin: 0; font-size: 24px;">Singapore Family Trip 2026 - Final Summary</h1>
+          <p style="margin: 5px 0 0 0; font-size: 12px; color: #666;">Exported on: ${new Date().toLocaleDateString()} | Room Code: ${activeRoom} | Currency: ${currency}</p>
+        </div>
+    `;
+
+    itinerary.forEach((d) => {
+      let dayTotalEst = 0;
+      let dayTotalSpent = 0;
+
+      content += `<div style="margin-bottom: 20px;">
+        <h3 style="background: #f1f5f9; padding: 8px; font-size: 14px; margin: 0 0 8px 0; border-radius: 4px;">
+          Day ${d.day}: ${d.date} - ${d.title}
+        </h3>
+        <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+          <thead>
+            <tr style="border-b: 1px solid #ccc; text-align: left; color: #555;">
+              <th style="padding: 4px;">Status</th>
+              <th style="padding: 4px;">Time</th>
+              <th style="padding: 4px;">Activity</th>
+              <th style="padding: 4px;">Location</th>
+              <th style="padding: 4px; text-align: right;">Cost</th>
+            </tr>
+          </thead>
+          <tbody>`;
+
+      d.items.forEach((item) => {
+        totalEst += item.costSGD;
+        dayTotalEst += item.costSGD;
+        if (item.checked) {
+          totalSpent += item.costSGD;
+          dayTotalSpent += item.costSGD;
+        }
+
+        content += `
+          <tr style="border-b: 1px solid #eee;">
+            <td style="padding: 6px;">${item.checked ? '<strong style="color: green;">✓ Completed</strong>' : '<span style="color: #888;">Pending</span>'}</td>
+            <td style="padding: 6px; font-family: monospace;">${item.time}</td>
+            <td style="padding: 6px;"><strong>${item.title}</strong></td>
+            <td style="padding: 6px;">${item.location || '-'}</td>
+            <td style="padding: 6px; text-align: right;">${item.costSGD > 0 ? formatCost(item.costSGD) : 'Free'}</td>
+          </tr>
+        `;
+      });
+
+      content += `</tbody></table></div>`;
+    });
+
+    content += `
+      <div style="margin-top: 30px; padding: 15px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px;">
+        <h3 style="margin: 0 0 10px 0; font-size: 16px;">Financial Record Totals</h3>
+        <p style="margin: 4px 0; font-size: 13px;">Total Estimated Budget: <strong>${formatCost(totalEst)}</strong></p>
+        <p style="margin: 4px 0; font-size: 13px; color: green;">Total Actual Spent: <strong>${formatCost(totalSpent)}</strong></p>
+      </div>
+    </div>`;
+
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write(`
+      <html>
+        <head><title>Singapore Trip Itinerary & Expenses</title></head>
+        <body>${content}</body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      printWindow.print();
+    }, 250);
+  };
+
+  const calculateTotals = () => {
+    let totalEstimated = 0;
+    let totalCompleted = 0;
+    itinerary.forEach((d) => {
+      d.items.forEach((item) => {
+        totalEstimated += item.costSGD;
+        if (item.checked) totalCompleted += item.costSGD;
+      });
+    });
+    return { totalEstimated, totalCompleted };
+  };
+
+  const { totalEstimated, totalCompleted } = calculateTotals();
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans pb-20">
+      <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 py-3 shadow-lg">
+        <div className="max-w-3xl mx-auto flex items-center justify-between">
+          <div className="flex items-center space-x-2.5">
+            <div className="bg-gradient-to-tr from-amber-500 to-red-600 p-2 rounded-xl text-white shadow-md">
+              <Compass className="w-5 h-5" />
+            </div>
+            <div>
+              <h1 className="text-base font-bold bg-gradient-to-r from-white via-slate-200 to-amber-300 bg-clip-text text-transparent">
+                Singapore Trip 2026
+              </h1>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={handleExportPDF}
+              className="bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition shadow-sm"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Export PDF</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="flex-1 max-w-3xl w-full mx-auto p-4 space-y-4">
+        <div className="grid grid-cols-4 bg-slate-900 p-1 rounded-2xl border border-slate-800 text-xs font-medium">
+          <button onClick={() => setActiveTab('itinerary')} className={`py-2 rounded-xl ${activeTab === 'itinerary' ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400'}`}>Itinerary</button>
+          <button onClick={() => setActiveTab('budget')} className={`py-2 rounded-xl ${activeTab === 'budget' ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400'}`}>Budget</button>
+        </div>
+
+        {activeTab === 'budget' && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800">
+                <div className="text-xs text-slate-400">Total Budget</div>
+                <div className="text-xl font-bold text-amber-400">{formatCost(totalEstimated)}</div>
+              </div>
+              <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800">
+                <div className="text-xs text-slate-400">Actual Spent</div>
+                <div className="text-xl font-bold text-emerald-400">{formatCost(totalCompleted)}</div>
+              </div>
+            </div>
+
+            <div className="bg-gradient-to-r from-amber-500/10 to-emerald-500/10 p-4 rounded-2xl border border-amber-500/20 flex items-center justify-between">
+              <div>
+                <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <FileText className="w-4 h-4 text-amber-400" />
+                  Save Records
+                </h3>
+                <p className="text-[11px] text-slate-400">Save complete itinerary & financial logs to PDF.</p>
+              </div>
+              <button
+                onClick={handleExportPDF}
+                className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-3 py-2 rounded-xl text-xs flex items-center gap-1"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export PDF</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
